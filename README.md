@@ -26,7 +26,7 @@ Options:
   -h, --help               Print help
   -V, --version            Print version
 ```
-### Account mode
+## Account mode
 ```
 Bruteforce a private key
 
@@ -35,14 +35,14 @@ Usage:  ethereum_vanity account
 Options:
 -h, --help Print help
 ```
-#### Example
+### Example
 Generate account address with prefix "**0xabcd**" (ignore-case)
 ```
 ./ethereum_vanity -p abcd -i account
 Started 8 threads
 Address: 0xabCD0fc318dE8b3EE2Eb1351150bcd28B13413d0, private key: 0x68cb4694bebf4f42bf54353c5fce6781a50b8ed6cff228033cceb20f3dc6c9de, zero bytes: 0
 ```
-### Contract mode
+## Contract mode
 ```
 Bruteforce a CREATE2 salt
 
@@ -53,7 +53,7 @@ Options:
   -b, --bytecode <BYTECODE>                  Bytecode of the contract
   -h, --help                                 Print help
 ```
-#### Example
+### Example
 Generate contract address with suffix "**eF**" (case-sensitive) with as many zero bytes as possible
 ```
 ./ethereum_vanity -s eF -z contract -d 0x0000111122223333444455556666777788889999 -b 0x1234
