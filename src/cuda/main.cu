@@ -6,7 +6,7 @@
 #include "compute.cuh"
 
 #ifndef THREADS_PER_BLOCK
-#define THREADS_PER_BLOCK 512
+#define THREADS_PER_BLOCK 256
 #endif
 
 
