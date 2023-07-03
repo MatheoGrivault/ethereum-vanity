@@ -3,7 +3,6 @@
 #endif
 
 
-
 #include <string>
 #include <iostream>
 #include <stdio.h>
@@ -15,10 +14,7 @@
 #include <secp256k1_recovery.h>
 
 
-
-
-
-__global__ void keccak256Hash(const uint8_t* const& input, uint8_t* const& output) {
+__global__ void keccak256Hash(const uint8_t* input, uint8_t* output){
     // Tableau de coefficients de rotation pour l'algorithme Keccak
     const int R[24] = {
         1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44
