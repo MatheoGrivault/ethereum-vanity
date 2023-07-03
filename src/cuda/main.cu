@@ -88,11 +88,35 @@ Options parseOptions(int argc, char* argv[]){
 
 }
 
+void printHelp(const cxxopts::Options& options) {
+    std::cout << options.help() << std::endl;
+}
+
 int main(int argc, char ** argv[]){
 
+    Options options = parseOptions(argc, argv);
+
+    switch (options.command){
+
+        case command::Account:
+            /* code */
+            break;
+        
+        case command::Contract:
+            /* code */
+            break;
+        
+
+        case Command::Help:
+            printHelp(cmdlineOptions);
+            break;
     
+    }
 
 
+    return 0;
+    
+    
 
     std::cout<<"Starting brute force attack"<<std::endl;
 
