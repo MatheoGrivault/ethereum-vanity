@@ -10,10 +10,6 @@
 #define THREADS_PER_BLOCK 256
 #endif
 
-#include <iostream>
-#include <string>
-#include <cxxopts.hpp>
-
 enum class Command {
     Account,
     Contract,
@@ -72,9 +68,7 @@ Options parseOptions(int argc, char* argv[]) {
 
         std::string commandStr = result["command"].as<std::string>();
         options.command = parseCommand(commandStr);
-    } 
-    
-    catch (const cxxopts::OptionException& e) {
+    } catch (const cxxopts::OptionException& e) {
         std::cerr << "Error parsing command line options: " << e.what() << std::endl;
         std::cerr << cmdlineOptions.help() << std::endl;
         exit(1);
@@ -91,16 +85,83 @@ int main(int argc, char* argv[]) {
     Options options = parseOptions(argc, argv);
 
     switch (options.command) {
+
         case Command::Account:
-            // Code pour la commande 'account'
             std::cout << "Bruteforce a private key" << std::endl;
-            // Ajoutez le code pour la commande 'account' ici
-            break;
+    {
+        const int privateKeySize = 32;
+        uint8_t privateKey[privateKeySize];
+
+        // Allocation de la mémoire sur le GPU
+        uint8_t* dev_privateKey;
+        cudaMalloc((void**)&dev_privateKey, privateKeySize * sizeof(uint8_t));
+
+        // Définition de la configuration des blocs et des threads
+        dim3 blockDim(THREADS_PER_BLOCK); // Nombre de threads par bloc
+        dim3 gridDim(1); // Nombre de blocs
+
+        // Exécution du kernel CUDA
+        generatePrivateKey<<<gridDim, blockDim>>>(dev_privateKey);
+
+        // Copie du résultat depuis le GPU vers le CPU
+        cudaMemcpy(privateKey, dev_privateKey, privateKeySize * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+
+        // Libération de la mémoire sur le GPU
+        cudaFree(dev_privateKey);
+
+        // Conversion du privateKey en hexadécimal
+        std::stringstream ss;
+        for (int i = 0; i < privateKeySize; i++) {
+            ss << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(privateKey[i]);
+        }
+        std::string privateKeyHex = ss.str();
+
+        std::cout << "Private Key: " << privateKeyHex << std::endl;
+
+        // Vérification de l'adresse Ethereum
+        const std::string prefix = "0x"; // Préfixe de l'adresse Ethereum à rechercher
+        const int prefixSize = prefix.size() / 2; // Taille du préfixe en octets
+
+        const int numKeys = 1; // Nombre de clés privées à vérifier
+        bool results[numKeys]; // Tableau pour stocker les résultats de vérification
+
+        // Allocation de la mémoire sur le GPU
+        uint8_t* dev_privateKeys;
+        cudaMalloc((void**)&dev_privateKeys, numKeys * privateKeySize * sizeof(uint8_t));
+
+        bool* dev_results;
+        cudaMalloc((void**)&dev_results, numKeys * sizeof(bool));
+
+        // Copie des données vers le GPU
+        cudaMemcpy(dev_privateKeys, privateKey, numKeys * privateKeySize * sizeof(uint8_t), cudaMemcpyHostToDevice);
+
+        // Exécution du kernel CUDA pour vérifier les adresses
+        checkAddresses<<<1, 1>>>(dev_privateKeys, numKeys, reinterpret_cast<const uint8_t*>(prefix.data()), prefixSize, dev_results);
+
+        // Copie des résultats depuis le GPU vers le CPU
+        cudaMemcpy(results, dev_results, numKeys * sizeof(bool), cudaMemcpyDeviceToHost);
+
+        // Libération de la mémoire sur le GPU
+        cudaFree(dev_privateKeys);
+        cudaFree(dev_results);
+
+        // Vérification du résultat
+        if (results[0]) {
+            std::cout << "Address with prefix " << prefix << " found!" << std::endl;
+        } else {
+            std::cout << "No address with prefix " << prefix << " found." << std::endl;
+        }
+    }
+
+    break;
+
         case Command::Contract:
             // Code pour la commande 'contract'
             std::cout << "Bruteforce a CREATE2 salt" << std::endl;
             // Ajoutez le code pour la commande 'contract' ici
             break;
+
+
         case Command::Help:
             printHelp(cmdlineOptions);
             break;

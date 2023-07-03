@@ -5,6 +5,7 @@
 
 #include <string>
 #include <iostream>
+#include <sstream>
 #include <stdio.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
@@ -13,6 +14,7 @@
 #include <secp256k1.h>
 #include <secp256k1_recovery.h>
 
+#include "compute.cuh"
 
 __global__ void keccak256Hash(const uint8_t* input, uint8_t* output){
     // Tableau de coefficients de rotation pour l'algorithme Keccak
@@ -60,36 +62,64 @@ __global__ void keccak256Hash(const uint8_t* input, uint8_t* output){
     }
 }
 
-std::string hashCompute (std::string& plaintext, std::string hash){
-    const int inputSize = message.size() * sizeof(uint8_t);
-    const int outputSize = hash.size() * sizeof(uint8_t);
+__global__ void generatePrivateKey(uint8_t* dev_privateKey){
+    // Calcul des indices de thread et de bloc
+    int tid = threadIdx.x;
+    int bid = blockIdx.x;
 
-    uint8_t* dev_input;
-    uint8_t* dev_output;
+    // Calcul de l'index global dans le tableau de sortie
+    int idx = bid * blockDim.x + tid;
 
-    cudaMalloc((void**)&dev_input, inputSize);
-    cudaMalloc((void**)&dev_output, outputSize);
+    // Initialisation du générateur de nombres aléatoires
+    curandState state;
+    curand_init(0, idx, 0, &state);
 
-    cudaMemcpy(dev_input, message.data(), inputSize, cudaMemcpyHostToDevice);
-
-    // Définition de la configuration des blocs et des threads
-    dim3 blockDim(256); // Nombre de threads par bloc
-    dim3 gridDim(1); // Nombre de blocs
-
-    // Exécution du kernel CUDA
-    keccak256Hash<<<gridDim, blockDim>>>(dev_input, dev_output);
-
-    // Copie des résultats depuis le GPU vers le CPU
-    cudaMemcpy(hash.data(), dev_output, outputSize, cudaMemcpyDeviceToHost);
-
-    // Libération de la mémoire sur le GPU
-    cudaFree(dev_input);
-    cudaFree(dev_output);
-
-    return hash;
+    // Génération d'un nombre aléatoire
+    dev_privateKey[idx] = curand(&state) % 256;
 }
 
-
-bool checkAdress(std::string& adress, std::string& hash){
-    
+__global__ void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results) {
+    int tid = threadIdx.x + blockIdx.x * blockDim.x;
+  
+    if (tid < numKeys) {
+        secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
+        
+        // Récupérer la clé privée pour le thread actuel
+        const uint8_t* privateKey = privateKeys + tid * 32;
+        
+        // Vérifier la clé privée
+        secp256k1_ecdsa_signature signature;
+        if (secp256k1_ecdsa_sign(ctx, &signature, privateKey, nullptr, nullptr, nullptr) != 1) {
+            results[tid] = false;
+            return;
+        }
+        
+        // Générer la clé publique
+        secp256k1_pubkey publicKey;
+        if (secp256k1_ec_pubkey_create(ctx, &publicKey, privateKey) != 1) {
+            results[tid] = false;
+            return;
+        }
+        
+        // Générer l'adresse Ethereum
+        unsigned char addressBytes[20];
+        size_t addressSize = sizeof(addressBytes);
+        if (secp256k1_ec_pubkey_serialize(ctx, addressBytes, &addressSize, &publicKey, SECP256K1_EC_COMPRESSED) != 1) {
+            results[tid] = false;
+            return;
+        }
+        
+        // Comparer l'adresse avec le préfixe spécifié
+        bool match = true;
+        for (int i = 0; i < prefixSize; ++i) {
+            if (addressBytes[i] != prefix[i]) {
+                match = false;
+                break;
+            }
+        }
+        
+        results[tid] = match;
+        
+        secp256k1_context_destroy(ctx);
+    }
 }
