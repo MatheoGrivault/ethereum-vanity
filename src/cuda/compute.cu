@@ -10,6 +10,7 @@
 #include <cuda.h>
 #include <cuda_runtime.h>
 #include <curand.h>
+#include <curand_kernel.h>
 #include <iomanip>
 #include <secp256k1.h>
 #include <secp256k1_recovery.h>
@@ -78,10 +79,8 @@ __global__ void generatePrivateKey(uint8_t* dev_privateKey){
     dev_privateKey[idx] = curand(&state) % 256;
 }
 
-__global__ void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results) {
-    int tid = threadIdx.x + blockIdx.x * blockDim.x;
-  
-    if (tid < numKeys) {
+void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results) {
+    for (int tid = 0; tid < numKeys; ++tid) {
         secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
         
         // Récupérer la clé privée pour le thread actuel
