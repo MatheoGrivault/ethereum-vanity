@@ -2,10 +2,10 @@
 #include <string>
 #include <time.h>
 #include <chrono>
-#include <cxxopts.hpp>
 #include <iomanip>
 #include <sstream>
 
+#include "CLI11/include/CLI/CLI.hpp"
 #include "compute.cuh"
 
 #ifndef THREADS_PER_BLOCK
@@ -31,122 +31,114 @@ Command parseCommand(const std::string& commandStr) {
         return Command::Account;
     } else if (commandStr == "contract") {
         return Command::Contract;
-    } else if (commandStr == "help") {
-        return Command::Help;
     } else {
-        return Command::Help;
+        throw CLI::ValidationError("Invalid command. Valid commands are: account, contract");
     }
 }
 
-std::pair<Options, cxxopts::Options> parseOptions(int argc, char* argv[]) {
+Options parseOptions(int argc, char* argv[]) {
     Options options;
+    
+    CLI::App app{"Bruteforce Ethereum addresses"};
 
-    cxxopts::Options cmdlineOptions("ethereum_vanity", "Bruteforce Ethereum addresses");
+    app.add_option("-p,--prefix", options.prefix, "Address prefix");
+    app.add_option("-s,--suffix", options.suffix, "Address suffix");
+    app.add_flag("-z,--zero-bytes", options.zeroBytes, "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes");
+    app.add_flag("-i,--ignore-case", options.ignoreCase, "Ignore case for prefix and suffix");
 
-    cmdlineOptions.add_options()
-        ("p,prefix", "Address prefix", cxxopts::value<std::string>(options.prefix))
-        ("s,suffix", "Address suffix", cxxopts::value<std::string>(options.suffix))
-        ("z,zero-bytes", "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes", cxxopts::value<bool>(options.zeroBytes))
-        ("i,ignore-case", "Ignore case for prefix and suffix", cxxopts::value<bool>(options.ignoreCase))
-        ("h,help", "Print help")
-        ("V,version", "Print version");
+    CLI::App *account_subcommand = app.add_subcommand("account", "Bruteforce a private key");
+    CLI::App *contract_subcommand = app.add_subcommand("contract", "Bruteforce a CREATE2 salt");
 
-    cmdlineOptions.parse_positional({"command"});
+    account_subcommand->callback([&]() { options.command = Command::Account; });
+    contract_subcommand->callback([&]() { options.command = Command::Contract; });
 
     try {
-        auto result = cmdlineOptions.parse(argc, argv);
-
-        if (result.count("help")) {
-            throw std::runtime_error("Print help");
-        }
-
-        if (result.count("version")) {
-            throw std::runtime_error("Print version");
-        }
-
-        if (result.count("command") == 0) {
-            throw std::runtime_error("No command specified");
-        }
-
-        std::string commandStr = result["command"].as<std::string>();
-        options.command = parseCommand(commandStr);
-    } catch (const std::exception& e) {
+        app.parse(argc, argv);
+    } catch (const CLI::ParseError &e) {
         std::cerr << "Error parsing command line options: " << e.what() << std::endl;
-        std::cerr << cmdlineOptions.help() << std::endl;
-        exit(1);
+        exit(app.exit(e));
     }
 
-    return {options, cmdlineOptions};
+    return options;
 }
 
-void printHelp(const cxxopts::Options& options) {
-    std::cout << options.help() << std::endl;
-}
 
 int main(int argc, char* argv[]) {
-    auto [options, cmdlineOptions] = parseOptions(argc, argv);
+    Options options = parseOptions(argc, argv);
 
     switch (options.command) {
         case Command::Account: {
-            std::cout << "Bruteforce a private key" << std::endl;
-            const int privateKeySize = 32;
-            uint8_t privateKey[privateKeySize];
+            std::cout<< "Bruteforce a private key" << std::endl;
+
+            // Nombre de clés privées à générer et à vérifier
+            const int numKeys = THREADS_PER_BLOCK;
+
+            // Allocation de la mémoire sur le CPU pour stocker les clés privées
+            uint8_t* privateKeys = new uint8_t[numKeys * 32];
 
             // Allocation de la mémoire sur le GPU
-            uint8_t* dev_privateKey;
-            cudaMalloc((void**)&dev_privateKey, privateKeySize * sizeof(uint8_t));
+            uint8_t* dev_privateKeys;
+            cudaMalloc((void**)&dev_privateKeys, numKeys * 32 * sizeof(uint8_t));
 
             // Définition de la configuration des blocs et des threads
             dim3 blockDim(THREADS_PER_BLOCK); // Nombre de threads par bloc
-            dim3 gridDim(1); // Nombre de blocs
+            dim3 gridDim((numKeys + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK); // Nombre de blocs
 
-            // Exécution du kernel CUDA
-            generatePrivateKey<<<gridDim, blockDim>>>(dev_privateKey);
+            // Exécution du kernel CUDA pour générer les clés privées
+            generatePrivateKey<<<gridDim, blockDim>>>(dev_privateKeys, numKeys);
 
             // Copie du résultat depuis le GPU vers le CPU
-            cudaMemcpy(privateKey, dev_privateKey, privateKeySize * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+            cudaMemcpy(privateKeys, dev_privateKeys, numKeys * 32 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
 
             // Libération de la mémoire sur le GPU
-            cudaFree(dev_privateKey);
+            cudaFree(dev_privateKeys);
 
-            // Conversion du privateKey en hexadécimal
-            std::stringstream ss;
-            for (int i = 0; i < privateKeySize; i++) {
-                ss << std::setw(2) << std::setfill('0') << std::hex << static_cast<int>(privateKey[i]);
-            }
-            std::string privateKeyHex = ss.str();
-
-            std::cout << "Private Key: " << privateKeyHex << std::endl;
-
-            // Vérification de l'adresse Ethereum
-            const std::string prefix = "0x"; // Préfixe de l'adresse Ethereum à rechercher
+            // Préfixe de l'adresse Ethereum à rechercher
+            const std::string prefix = "0x";
             const int prefixSize = prefix.size() / 2; // Taille du préfixe en octets
 
-            const int numKeys = 1; // Nombre de clés privées à vérifier
-            bool results[numKeys]; // Tableau pour stocker les résultats de vérification
+            // Tableau pour stocker les résultats de vérification
+            bool* results = new bool[numKeys];
 
-            checkAddresses(privateKey, numKeys, reinterpret_cast<const uint8_t*>(prefix.data()), prefixSize, results);
-
-            // Vérification du résultat
-            if (results[0]) {
-                std::cout << "Address with prefix " << prefix << " found!" << std::endl;
-            } else {
-                std::cout << "No address with prefix " << prefix << " found." << std::endl;
+            // Print private keys
+            std::cout << "Generated private keys:" << std::endl;
+            for (int i = 0; i < numKeys; ++i) {
+                std::stringstream ss;
+                for (int j = 0; j < 32; ++j) {
+                    ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(privateKeys[i * 32 + j]);
+                }
+                std::cout << ss.str() << std::endl;
             }
 
+            // Vérification des adresses Ethereum pour toutes les clés privées générées
+            checkAddresses(privateKeys, numKeys, reinterpret_cast<const uint8_t*>(prefix.data()), prefixSize, results);
+
+            // Vérification du résultat
+            for (int i = 0; i < numKeys; ++i) {
+                if (results[i]) {
+                    std::cout << "Address with prefix " << prefix << " found for private key " << i << "!" << std::endl;
+                }
+            }
+
+            // Libération de la mémoire sur le CPU
+            delete[] privateKeys;
+            delete[] results;
+
             break;
         }
+    
 
         case Command::Contract: {
-            // Code pour la commande 'contract'
-            std::cout << "Bruteforce a CREATE2 salt" << std::endl;
-            // Ajoutez le code pour la commande 'contract' ici
+            // Place your existing contract command logic here
             break;
         }
-        case Command::Help: {
-            printHelp(cmdlineOptions);
-            break;
+        default: {
+            std::cout << "Invalid command. Valid commands are: account, contract" << std::endl;
+            return 1;
         }
+            
+
+        
     }
 
     return 0;

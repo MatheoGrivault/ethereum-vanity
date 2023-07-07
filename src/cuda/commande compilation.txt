@@ -1,0 +1,1 @@
+nvcc -o etherum-vanity  main.cu compute.cu -I /home/christophe/Téléchargements/secp256k1-master/include -I /home/christophe/Documents/ethereum-vanity/src/cuda/CLI11/include -lsecp256k1

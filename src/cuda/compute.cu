@@ -63,21 +63,23 @@ __global__ void keccak256Hash(const uint8_t* input, uint8_t* output){
     }
 }
 
-__global__ void generatePrivateKey(uint8_t* dev_privateKey){
-    // Calcul des indices de thread et de bloc
+__global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys){
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
-    // Calcul de l'index global dans le tableau de sortie
     int idx = bid * blockDim.x + tid;
 
-    // Initialisation du générateur de nombres aléatoires
     curandState state;
     curand_init(0, idx, 0, &state);
 
-    // Génération d'un nombre aléatoire
-    dev_privateKey[idx] = curand(&state) % 256;
+    // Each thread should generate a full 32-byte private key
+    if (idx < numKeys) {
+        for (int i = 0; i < 32; i++) {
+            dev_privateKeys[idx*32 + i] = curand(&state) % 256;
+        }
+    }
 }
+
 
 void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results) {
     for (int tid = 0; tid < numKeys; ++tid) {
@@ -87,25 +89,27 @@ void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* pref
         const uint8_t* privateKey = privateKeys + tid * 32;
         
         // Vérifier la clé privée
-        secp256k1_ecdsa_signature signature;
-        if (secp256k1_ecdsa_sign(ctx, &signature, privateKey, nullptr, nullptr, nullptr) != 1) {
+        if (secp256k1_ec_seckey_verify(ctx, privateKey) != 1) {
             results[tid] = false;
-            return;
+            secp256k1_context_destroy(ctx);
+            continue;
         }
         
         // Générer la clé publique
         secp256k1_pubkey publicKey;
         if (secp256k1_ec_pubkey_create(ctx, &publicKey, privateKey) != 1) {
             results[tid] = false;
-            return;
+            secp256k1_context_destroy(ctx);
+            continue;
         }
         
         // Générer l'adresse Ethereum
-        unsigned char addressBytes[20];
+        unsigned char addressBytes[65];
         size_t addressSize = sizeof(addressBytes);
         if (secp256k1_ec_pubkey_serialize(ctx, addressBytes, &addressSize, &publicKey, SECP256K1_EC_COMPRESSED) != 1) {
             results[tid] = false;
-            return;
+            secp256k1_context_destroy(ctx);
+            continue;
         }
         
         // Comparer l'adresse avec le préfixe spécifié
