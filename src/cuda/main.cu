@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
             cudaFree(dev_privateKeys);
 
             // Préfixe de l'adresse Ethereum à rechercher
-            const std::string prefix = "0x";
+            std::string prefix = options.prefix.empty() ? "0x" : options.prefix;
             const int prefixSize = prefix.size() / 2; // Taille du préfixe en octets
 
             // Tableau pour stocker les résultats de vérification
@@ -135,10 +135,7 @@ int main(int argc, char* argv[]) {
         default: {
             std::cout << "Invalid command. Valid commands are: account, contract" << std::endl;
             return 1;
-        }
-            
-
-        
+        }       
     }
 
     return 0;

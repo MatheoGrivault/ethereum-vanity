@@ -16,52 +16,10 @@
 #include <secp256k1_recovery.h>
 
 #include "compute.cuh"
+#include "keccak.cuh"
 
-__global__ void keccak256Hash(const uint8_t* input, uint8_t* output){
-    // Tableau de coefficients de rotation pour l'algorithme Keccak
-    const int R[24] = {
-        1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44
-    };
+#include <cstdint>
 
-    // Tailles des états de l'algorithme Keccak
-    const int stateSize = 1600;
-    const int laneSize = 8;
-
-    // Calcul des indices de thread et de bloc
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
-
-    // Calcul de l'index global dans le tableau de sortie
-    int idx = bid * blockDim.x + tid;
-
-    // Variables de l'algorithme Keccak
-    uint8_t state[stateSize] = {0};
-    uint8_t temp[laneSize] = {0};
-
-    // Copie des données d'entrée dans l'état
-    if (idx < laneSize) {
-        state[idx] = input[idx];
-    }
-
-    // Boucle principale de l'algorithme Keccak
-    for (int r = 0; r < 24; r++) {
-        // XOR de l'état actuel avec les données d'entrée
-        state[tid] ^= input[tid];
-
-        // Permutation des voies de l'état
-        for (int i = 0; i < stateSize; i++) {
-            int j = (i + R[r]) % stateSize;
-            temp[tid] = state[i];
-            state[i] = state[j];
-            state[j] = temp[tid];
-        }
-    }
-
-    // Copie du résultat dans le tableau de sortie
-    if (idx < laneSize) {
-        output[idx] = state[idx];
-    }
-}
 
 __global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys){
     int tid = threadIdx.x;
@@ -80,8 +38,12 @@ __global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys){
     }
 }
 
-
 void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results) {
+    uint8_t* dev_input;
+    uint8_t* dev_output;
+    cudaMalloc((void**)&dev_input, sizeof(uint8_t)*65);
+    cudaMalloc((void**)&dev_output, sizeof(uint8_t)*32);
+
     for (int tid = 0; tid < numKeys; ++tid) {
         secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
         
@@ -103,15 +65,29 @@ void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* pref
             continue;
         }
         
-        // Générer l'adresse Ethereum
-        unsigned char addressBytes[65];
-        size_t addressSize = sizeof(addressBytes);
-        if (secp256k1_ec_pubkey_serialize(ctx, addressBytes, &addressSize, &publicKey, SECP256K1_EC_COMPRESSED) != 1) {
+        // Serialiser la clé publique
+        unsigned char publicKeyBytes[65];
+        size_t publicKeySize = sizeof(publicKeyBytes);
+        if (secp256k1_ec_pubkey_serialize(ctx, publicKeyBytes, &publicKeySize, &publicKey, SECP256K1_EC_COMPRESSED) != 1) {
             results[tid] = false;
             secp256k1_context_destroy(ctx);
             continue;
         }
         
+        // Copier les données sur le GPU
+        cudaMemcpy(dev_input, publicKeyBytes, sizeof(uint8_t)*65, cudaMemcpyHostToDevice);
+
+        // Utiliser mcm_cuda_keccak_hash_batch pour le calcul de hash
+        mcm_cuda_keccak_hash_batch(dev_input, publicKeySize, dev_output, 256, 1);
+
+        // Récupérer le résultat sur le CPU
+        uint8_t hashedPublicKey[32];
+        cudaMemcpy(hashedPublicKey, dev_output, sizeof(uint8_t)*32, cudaMemcpyDeviceToHost);
+
+        // Prendre les 20 derniers octets du hachage comme adresse Ethereum
+        uint8_t addressBytes[20];
+        memcpy(addressBytes, hashedPublicKey + 12, 20);
+
         // Comparer l'adresse avec le préfixe spécifié
         bool match = true;
         for (int i = 0; i < prefixSize; ++i) {
@@ -125,4 +101,7 @@ void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* pref
         
         secp256k1_context_destroy(ctx);
     }
+
+    cudaFree(dev_input);
+    cudaFree(dev_output);
 }
