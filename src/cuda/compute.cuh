@@ -9,9 +9,9 @@
 #ifndef COMPUTE_CUH
 #define COMPUTE_CUH
 
-__global__ void keccak256Hash(const uint8_t* input, uint8_t* output);
 __global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys);
-void checkAddresses(const uint8_t* privateKeys, int numKeys, const uint8_t* prefix, int prefixSize, bool* results);
+void checkAddresses(const uint8_t* privateKeys, int numKeys, const char* prefix_cstr, const char* suffix_cstr, bool* results, std::string* result_addresses);
+std::string createAddressString(const uint8_t* addressBytes, int size);
 
 #endif
  

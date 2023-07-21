@@ -41,16 +41,18 @@ Options parseOptions(int argc, char* argv[]) {
     
     CLI::App app{"Bruteforce Ethereum addresses"};
 
-    app.add_option("-p,--prefix", options.prefix, "Address prefix");
-    app.add_option("-s,--suffix", options.suffix, "Address suffix");
-    app.add_flag("-z,--zero-bytes", options.zeroBytes, "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes");
-    app.add_flag("-i,--ignore-case", options.ignoreCase, "Ignore case for prefix and suffix");
-
     CLI::App *account_subcommand = app.add_subcommand("account", "Bruteforce a private key");
     CLI::App *contract_subcommand = app.add_subcommand("contract", "Bruteforce a CREATE2 salt");
 
+    account_subcommand->add_option("-p,--prefix", options.prefix, "Address prefix");
+    account_subcommand->add_option("-s,--suffix", options.suffix, "Address suffix");
+    account_subcommand->add_flag("-z,--zero-bytes", options.zeroBytes, "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes");
+    account_subcommand->add_flag("-i,--ignore-case", options.ignoreCase, "Ignore case for prefix and suffix");
+
     account_subcommand->callback([&]() { options.command = Command::Account; });
     contract_subcommand->callback([&]() { options.command = Command::Contract; });
+
+    app.add_flag_function("-v,--version", [](int) { std::cout << "Version 1.0.0" << std::endl; exit(0); }, "Print version and exit");
 
     try {
         app.parse(argc, argv);
@@ -62,7 +64,6 @@ Options parseOptions(int argc, char* argv[]) {
     return options;
 }
 
-
 int main(int argc, char* argv[]) {
     Options options = parseOptions(argc, argv);
 
@@ -70,63 +71,34 @@ int main(int argc, char* argv[]) {
         case Command::Account: {
             std::cout<< "Bruteforce a private key" << std::endl;
 
-            // Nombre de clés privées à générer et à vérifier
             const int numKeys = THREADS_PER_BLOCK;
-
-            // Allocation de la mémoire sur le CPU pour stocker les clés privées
             uint8_t* privateKeys = new uint8_t[numKeys * 32];
-
-            // Allocation de la mémoire sur le GPU
             uint8_t* dev_privateKeys;
             cudaMalloc((void**)&dev_privateKeys, numKeys * 32 * sizeof(uint8_t));
-
-            // Définition de la configuration des blocs et des threads
-            dim3 blockDim(THREADS_PER_BLOCK); // Nombre de threads par bloc
-            dim3 gridDim((numKeys + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK); // Nombre de blocs
-
-            // Exécution du kernel CUDA pour générer les clés privées
+            dim3 blockDim(THREADS_PER_BLOCK);
+            dim3 gridDim((numKeys + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
             generatePrivateKey<<<gridDim, blockDim>>>(dev_privateKeys, numKeys);
-
-            // Copie du résultat depuis le GPU vers le CPU
             cudaMemcpy(privateKeys, dev_privateKeys, numKeys * 32 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
-
-            // Libération de la mémoire sur le GPU
             cudaFree(dev_privateKeys);
 
-            // Préfixe de l'adresse Ethereum à rechercher
-            std::string prefix = options.prefix.empty() ? "0x" : options.prefix;
-            const int prefixSize = prefix.size() / 2; // Taille du préfixe en octets
-
-            // Tableau pour stocker les résultats de vérification
             bool* results = new bool[numKeys];
+            std::string* result_addresses = new std::string[numKeys];
 
-            // Print private keys
-            std::cout << "Generated private keys:" << std::endl;
-            for (int i = 0; i < numKeys; ++i) {
-                std::stringstream ss;
-                for (int j = 0; j < 32; ++j) {
-                    ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(privateKeys[i * 32 + j]);
-                }
-                std::cout << ss.str() << std::endl;
-            }
+            checkAddresses(privateKeys, numKeys, options.prefix.c_str(), options.suffix.c_str(), results, result_addresses);
 
-            // Vérification des adresses Ethereum pour toutes les clés privées générées
-            checkAddresses(privateKeys, numKeys, reinterpret_cast<const uint8_t*>(prefix.data()), prefixSize, results);
-
-            // Vérification du résultat
             for (int i = 0; i < numKeys; ++i) {
                 if (results[i]) {
-                    std::cout << "Address with prefix " << prefix << " found for private key " << i << "!" << std::endl;
+                    std::cout << "Address with prefix " << options.prefix << " and suffix " << options.suffix << " found for private key " << i << "!" << std::endl;
+                    std::cout << "Address: " << result_addresses[i] << std::endl;
                 }
             }
 
-            // Libération de la mémoire sur le CPU
             delete[] privateKeys;
             delete[] results;
+            delete[] result_addresses;
 
             break;
         }
-    
 
         case Command::Contract: {
             // Place your existing contract command logic here
