@@ -9,77 +9,113 @@
 
 #include "keccak.cuh"
 #include "config.h"
-
+#include "contract.cuh"
 
 #ifndef Contract_Thread
 #define Contract_Thread 512
 #endif
 
-__global__ void generatesalt (curandState* states,uint64_t* salt){
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void generatesalt (curandState* states, uint64_t* salt) {
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
 
-    unsigned long long seed = index +clock64();
-    curand_init(seed, index, 0, &states[index]);
+    curand_init((unsigned long long) clock() + index, 0, 0, &states[index]);
 
-    salt[index] = curand(&states[index]);   
+    salt[index] = curand(&states[index]);
 }
 
-__device__ void keccak_hash_compute(BYTE* in, WORD inlen, BYTE* out, WORD n_outbit, WORD n_batch){
-    mcm_cuda_keccak_hash_batch(in, inlen, out, n_outbit, n_batch);
+__global__ void computeContractAdresse(uint64_t* salts, uint8_t* deploymentAddress, size_t deploymentAddressLen, uint8_t* bytecode, size_t bytecodeLen, uint8_t* contractAddresses){
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+
+    uint64_t salt = salts[index];
+
+    uint8_t* data = new uint8_t[deploymentAddressLen + sizeof(uint64_t)];
+    memcpy(data, deploymentAddress, deploymentAddressLen);
+    memcpy(data + deploymentAddressLen, &salt, sizeof(uint64_t));
+
+    uint8_t* hash = new uint8_t[32];
+    keccak_hash_compute(data, deploymentAddressLen + sizeof(uint64_t), hash, 256, 1);
+
+    memcpy(contractAddresses + (index * 20), hash + 12, 20);
+
+    delete[] data;
+    delete[] hash;
 }
 
-__global__ void computeContractAdresse(uint64_t* salts, uint8_t* deploymentAddress, size_t deploymentAddressLen, uint8_t* bytecode, size_t bytecodeLen, uint8_t* contractAddresses, size_t contractAddressLen){
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
+__device__ int cuda_memcmp(const void* s1, const void* s2, size_t n) {
+    const unsigned char *p1 = (unsigned char*)s1, *p2 = (unsigned char*)s2;
 
-    if (index <Contract_Thread) {
-        // Obtenir le "salt" pour ce thread
-        uint64_t salt = salts[index];
-
-        // Concaténer le "salt" avec l'adresse de déploiement
-        uint8_t* data = new uint8_t[deploymentAddressLen + sizeof(uint64_t)];
-        memcpy(data, deploymentAddress, deploymentAddressLen);
-        memcpy(data + deploymentAddressLen, &salt, sizeof(uint64_t));
-
-        // Calculer le hash sha3 du "salt" concaténé avec l'adresse de déploiement
-        uint8_t* hash = new uint8_t[32];
-        keccak_hash_batch_wrapper(data, deploymentAddressLen + sizeof(uint64_t), hash, 256, 1);
-
-        // Libérer la mémoire allouée pour la concaténation
-        delete[] data;
-
-        // Utiliser les 20 derniers octets du hash sha3 comme l'adresse de contrat
-        memcpy(contractAddresses + (index * contractAddressLen), hash + 12, contractAddressLen);
-
-        // Libérer la mémoire allouée pour le hash sha3
-        delete[] hash;
+    while(n--) {
+        if( *p1 != *p2 ) {
+            return *p1 - *p2;
+        } else {
+            p1++;
+            p2++;
+        }
     }
+
+    return 0;
+}
+
+__device__ bool verifyPrefixAndSuffix(uint8_t* address, uint8_t* prefix, size_t prefixLen, uint8_t* suffix, size_t suffixLen) {
+    if (prefixLen > 0 && cuda_memcmp(address, prefix, prefixLen) != 0) {
+        return false;
+    }
+
+    if (suffixLen > 0 && cuda_memcmp(address + 20 - suffixLen, suffix, suffixLen) != 0) {
+        return false;
+    }
+
+    return true;
+}
+
+__device__ int calculateNumZeroBytes(uint8_t* address) {
+    int zeroCount = 0;
+
+    for (int i = 0; i < 20; i++) {
+        if (address[i] == 0) {
+            zeroCount++;
+        } else {
+            break;
+        }
+    }
+
+    return zeroCount;
+}
+
+__device__ void generateContractAddress(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
+                                        const uint8_t* bytecode, size_t bytecodeLen,
+                                        uint64_t salt, uint8_t* contractAddress) {
+    uint8_t* data = new uint8_t[deploymentAddressLen + bytecodeLen + sizeof(uint64_t)];
+    memcpy(data, deploymentAddress, deploymentAddressLen);
+    memcpy(data + deploymentAddressLen, &salt, sizeof(uint64_t));
+    memcpy(data + deploymentAddressLen + sizeof(uint64_t), bytecode, bytecodeLen);
+
+    uint8_t* hash = new uint8_t[32];
+    keccak_hash_compute(data, deploymentAddressLen + bytecodeLen + sizeof(uint64_t), hash, 256, 1);
+
+    memcpy(contractAddress, hash + 12, 20);
+
+    delete[] data;
+    delete[] hash;
 }
 
 __global__ void verifyContractAdresse(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
                                         const uint8_t* bytecode, size_t bytecodeLen,
                                         uint64_t* salts, size_t numSalts,
-                                        uint8_t* validAddresses, size_t validAddressesLen){
+                                        uint8_t* validAddresses, int* validAddressesCount,
+                                        uint8_t* prefix, size_t prefixLen,
+                                        uint8_t* suffix, size_t suffixLen){
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
 
-
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int numThreads = Contract_Thread;
-
-    for (size_t i = tid; i < numSalts; i += numThreads) {
-        // Generate contract address using the deployment address, bytecode, and salt
+    if (index < numSalts) {
         uint8_t contractAddress[20];
-        generateContractAddress(deploymentAddress, deploymentAddressLen, bytecode, bytecodeLen, salts[i], contractAddress);
+        generateContractAddress(deploymentAddress, deploymentAddressLen, bytecode, bytecodeLen, salts[index], contractAddress);
 
-        // Verify the prefix and suffix of the generated address
-        if (verifyPrefixAndSuffix(contractAddress)) {
-            // Calculate the number of zero bytes in the generated address
+        if (verifyPrefixAndSuffix(contractAddress, prefix, prefixLen, suffix, suffixLen)) {
             int nZeroBytes = calculateNumZeroBytes(contractAddress);
 
-            // Check if the address meets the criteria of having the most zero bytes
             if (nZeroBytes > atomicMax(validAddressesCount, nZeroBytes)) {
-                // Store the address if it has the most zero bytes so far
-                for (int j = 0; j < 20; j++) {
-                    validAddresses[j] = contractAddress[j];
-                }
+                memcpy(validAddresses, contractAddress, 20);
             }
         }
     }

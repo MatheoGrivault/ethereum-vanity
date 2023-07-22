@@ -9,7 +9,7 @@
 #include "compute.cuh"
 
 #ifndef THREADS_PER_BLOCK
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 512
 #endif
 
 enum class Command {
@@ -21,6 +21,8 @@ enum class Command {
 struct Options {
     std::string prefix;
     std::string suffix;
+    std::string deployerAddress;
+    std::string Bytecode;
     bool zeroBytes;
     bool ignoreCase;
     Command command;
@@ -44,13 +46,21 @@ Options parseOptions(int argc, char* argv[]) {
     CLI::App *account_subcommand = app.add_subcommand("account", "Bruteforce a private key");
     CLI::App *contract_subcommand = app.add_subcommand("contract", "Bruteforce a CREATE2 salt");
 
+    //account command options
+    account_subcommand->callback([&]() { options.command = Command::Account; });
     account_subcommand->add_option("-p,--prefix", options.prefix, "Address prefix");
     account_subcommand->add_option("-s,--suffix", options.suffix, "Address suffix");
     account_subcommand->add_flag("-z,--zero-bytes", options.zeroBytes, "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes");
     account_subcommand->add_flag("-i,--ignore-case", options.ignoreCase, "Ignore case for prefix and suffix");
-
-    account_subcommand->callback([&]() { options.command = Command::Account; });
+    
+    //contract command options
     contract_subcommand->callback([&]() { options.command = Command::Contract; });
+    contract_subcommand->add_option("-p,--prefix", options.prefix, "Contract address prefix");
+    contract_subcommand->add_option("-s,--suffix", options.suffix, "Contract address suffix");
+    contract_subcommand->add_option("-d,--deployer", options.deployerAddress, "Deployer's address");
+    contract_subcommand->add_option("-b,--bytecode", options.Bytecode, "Contract's bytecode");
+    contract_subcommand->add_flag("-z,--zero-bytes", options.zeroBytes, "Bruteforce forever until stopped by the user, keeping the address with the most zero bytes");
+    contract_subcommand->add_flag("-i,--ignore-case", options.ignoreCase, "Ignore case for prefix and suffix");
 
     app.add_flag_function("-v,--version", [](int) { std::cout << "Version 1.0.0" << std::endl; exit(0); }, "Print version and exit");
 
@@ -101,9 +111,96 @@ int main(int argc, char* argv[]) {
         }
 
         case Command::Contract: {
-            // Place your existing contract command logic here
+            std::cout << "Bruteforce a CREATE2 salt" << std::endl;
+
+            const int numSalts = THREADS_PER_BLOCK;
+
+            // Allocate memory for salts and random states on the device
+            uint64_t* dev_salts;
+            curandState* devStates;
+            cudaMalloc(&devStates, numSalts * sizeof(curandState));
+            cudaMalloc((void**)&dev_salts, numSalts * sizeof(uint64_t));
+
+            // Define grid and block dimensions
+            dim3 blockDim(THREADS_PER_BLOCK);
+            dim3 gridDim((numSalts + blockDim.x - 1) / blockDim.x);
+
+            // Generate salts using the device function
+            generatesalt<<<gridDim, blockDim>>>(devStates, dev_salts);
+
+            // Assuming you have a deployment address and bytecode, replace these with the actual values.
+            std::string deploymentAddressStr = options.deployerAddress; // replace with actual deployment address
+            std::string bytecodeStr = options.Bytecode; // replace with actual bytecode
+
+            size_t deploymentAddressLen = deploymentAddressStr.size() / 2;
+            size_t bytecodeLen = bytecodeStr.size() / 2;
+
+            uint8_t* deploymentAddress = new uint8_t[deploymentAddressLen];
+            uint8_t* bytecode = new uint8_t[bytecodeLen];
+
+            for (size_t i = 0; i < deploymentAddressLen; i++) {
+                deploymentAddress[i] = std::stoul(deploymentAddressStr.substr(i*2, 2), nullptr, 16);
+            }
+
+            for (size_t i = 0; i < bytecodeLen; i++) {
+                bytecode[i] = std::stoul(bytecodeStr.substr(i*2, 2), nullptr, 16);
+            }
+
+            uint8_t* prefix = new uint8_t[options.prefix.size() / 2];
+            uint8_t* suffix = new uint8_t[options.suffix.size() / 2];
+
+            for (size_t i = 0; i < options.prefix.size() / 2; i++) {
+                prefix[i] = std::stoul(options.prefix.substr(i*2, 2), nullptr, 16);
+            }
+
+            for (size_t i = 0; i < options.suffix.size() / 2; i++) {
+                suffix[i] = std::stoul(options.suffix.substr(i*2, 2), nullptr, 16);
+            }
+
+            // Allocate memory on the device for the address verification results
+            uint8_t* dev_validAddress;
+            int* dev_validAddressesCount;
+            cudaMalloc((void**)&dev_validAddress, 20 * sizeof(uint8_t));
+            cudaMalloc((void**)&dev_validAddressesCount, sizeof(int));
+
+            verifyContractAdresse<<<gridDim, blockDim>>>(deploymentAddress, deploymentAddressLen, bytecode, bytecodeLen,
+                                                        dev_salts, numSalts, dev_validAddress, dev_validAddressesCount,
+                                                        prefix, options.prefix.size() / 2, suffix, options.suffix.size() / 2);
+
+            // Allocate memory on the host for the address verification results
+            uint8_t* validAddress = new uint8_t[20];
+            int* validAddressesCount = new int(0);
+
+            // Copy results from device to host
+            cudaMemcpy(validAddress, dev_validAddress, 20 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+            cudaMemcpy(validAddressesCount, dev_validAddressesCount, sizeof(int), cudaMemcpyDeviceToHost);
+
+            if (*validAddressesCount > 0) {
+                std::cout << "Valid contract address with " << *validAddressesCount << " leading zero bytes found: ";
+                for (int j = 0; j < 20; ++j) {
+                    std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)validAddress[j];
+                }
+                std::cout << std::endl;
+            } else {
+                std::cout << "No valid contract address found." << std::endl;
+            }
+
+            // Cleanup memory
+            delete[] deploymentAddress;
+            delete[] bytecode;
+            delete[] prefix;
+            delete[] suffix;
+            delete[] validAddress;
+            delete validAddressesCount;
+
+            cudaFree(devStates);
+            cudaFree(dev_salts);
+            cudaFree(dev_validAddress);
+            cudaFree(dev_validAddressesCount);
+
             break;
         }
+
         default: {
             std::cout << "Invalid command. Valid commands are: account, contract" << std::endl;
             return 1;

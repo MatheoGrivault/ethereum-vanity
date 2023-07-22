@@ -1,5 +1,5 @@
 #ifndef THREADS_PER_BLOCK
-#define THREADS_PER_BLOCK 256
+#define THREADS_PER_BLOCK 512
 #endif
 
 #include <string>
