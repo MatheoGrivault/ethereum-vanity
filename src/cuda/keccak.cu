@@ -4,6 +4,11 @@ extern "C"
 #include "keccak.cuh"
 }
 
+#ifndef KECCAK_INCLUDE
+#define KECCAK_INCLUDE
+#include "keccak.cuh"
+#endif
+
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
@@ -15,21 +20,7 @@ __constant__ LONG CUDA_KECCAK_CONSTS[24] = { 0x0000000000000001, 0x0000000000008
                                           0x8000000000000080, 0x000000000000800a, 0x800000008000000a, 0x8000000080008081, 0x8000000000008080,
                                           0x0000000080000001, 0x8000000080008008 };
 
-typedef struct {
 
-    BYTE sha3_flag;
-    WORD digestbitlen;
-    LONG rate_bits;
-    LONG rate_BYTEs;
-    LONG absorb_round;
-
-    int64_t state[KECCAK_STATE_SIZE];
-    BYTE q[KECCAK_Q_SIZE];
-
-    LONG bits_in_queue;
-
-} cuda_keccak_ctx_t;
-typedef cuda_keccak_ctx_t CUDA_KECCAK_CTX;
 
 __device__ LONG cuda_keccak_leuint64(void *in)
 {
@@ -310,8 +301,7 @@ __device__ void cuda_keccak_final(cuda_keccak_ctx_t *ctx, BYTE *out)
     }
 }
 
-__global__ void kernel_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD n_batch, WORD KECCAK_BLOCK_SIZE)
-{
+__global__ void kernel_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD n_batch, WORD KECCAK_BLOCK_SIZE){
     WORD thread = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread >= n_batch)
     {
@@ -324,6 +314,18 @@ __global__ void kernel_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD
     cuda_keccak_update(&ctx, in, inlen);
     cuda_keccak_final(&ctx, out);
 }
+
+__device__ void device_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD KECCAK_BLOCK_SIZE) {
+    // Notez que nous ne traitons qu'un seul élément ici, donc pas besoin de n_batch ou de thread.
+    BYTE* in = indata;
+    BYTE* out = outdata;
+    CUDA_KECCAK_CTX ctx;
+    cuda_keccak_init(&ctx, KECCAK_BLOCK_SIZE << 3);
+    cuda_keccak_update(&ctx, in, inlen);
+    cuda_keccak_final(&ctx, out);
+}
+
+
 extern "C"
 {
     void mcm_cuda_keccak_hash_batch(BYTE * in, WORD inlen, BYTE * out, WORD n_outbit, WORD n_batch)

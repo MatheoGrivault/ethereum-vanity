@@ -3,16 +3,23 @@
 #include <time.h>
 #include <chrono>
 #include <iomanip>
-#include <sstream>
+#include <sstream>  
+#include<curand.h>
+#include<curand_kernel.h>
 
 #include "CLI11/include/CLI/CLI.hpp"
+#ifndef KECCAK_INCLUDE
+#define KECCAK_INCLUDE
+#include "keccak.cuh"
+#endif
 #include "compute.cuh"
-
+#include "contract.cuh"
+#include "config.h"
 #ifndef THREADS_PER_BLOCK
 #define THREADS_PER_BLOCK 512
 #endif
 
-enum class Command {
+enum class Command {    
     Account,
     Contract,
     Help
@@ -78,6 +85,7 @@ int main(int argc, char* argv[]) {
     Options options = parseOptions(argc, argv);
 
     switch (options.command) {
+
         case Command::Account: {
             std::cout<< "Bruteforce a private key" << std::endl;
 
@@ -146,16 +154,36 @@ int main(int argc, char* argv[]) {
                 bytecode[i] = std::stoul(bytecodeStr.substr(i*2, 2), nullptr, 16);
             }
 
-            uint8_t* prefix = new uint8_t[options.prefix.size() / 2];
-            uint8_t* suffix = new uint8_t[options.suffix.size() / 2];
+            // Convert prefix and suffix from string to uint8_t*
+            size_t prefixLen = options.prefix.size() / 2;
+            size_t suffixLen = options.suffix.size() / 2;
 
-            for (size_t i = 0; i < options.prefix.size() / 2; i++) {
+            uint8_t* prefix = new uint8_t[prefixLen];
+            uint8_t* suffix = new uint8_t[suffixLen];
+
+            for (size_t i = 0; i < prefixLen; i++) {
                 prefix[i] = std::stoul(options.prefix.substr(i*2, 2), nullptr, 16);
             }
 
-            for (size_t i = 0; i < options.suffix.size() / 2; i++) {
+            for (size_t i = 0; i < suffixLen; i++) {
                 suffix[i] = std::stoul(options.suffix.substr(i*2, 2), nullptr, 16);
             }
+
+            // Copying host data to device
+            uint8_t* d_deploymentAddress;
+            uint8_t* d_bytecode;
+            uint8_t* d_prefix;
+            uint8_t* d_suffix;
+
+            cudaMalloc(&d_deploymentAddress, deploymentAddressLen * sizeof(uint8_t));
+            cudaMalloc(&d_bytecode, bytecodeLen * sizeof(uint8_t));
+            cudaMalloc(&d_prefix, prefixLen * sizeof(uint8_t));
+            cudaMalloc(&d_suffix, suffixLen * sizeof(uint8_t));
+
+            cudaMemcpy(d_deploymentAddress, deploymentAddress, deploymentAddressLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_bytecode, bytecode, bytecodeLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_prefix, prefix, prefixLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_suffix, suffix, suffixLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
 
             // Allocate memory on the device for the address verification results
             uint8_t* dev_validAddress;
@@ -163,9 +191,9 @@ int main(int argc, char* argv[]) {
             cudaMalloc((void**)&dev_validAddress, 20 * sizeof(uint8_t));
             cudaMalloc((void**)&dev_validAddressesCount, sizeof(int));
 
-            verifyContractAdresse<<<gridDim, blockDim>>>(deploymentAddress, deploymentAddressLen, bytecode, bytecodeLen,
+            verifyContractAdresse<<<gridDim, blockDim>>>(d_deploymentAddress, deploymentAddressLen, d_bytecode, bytecodeLen,
                                                         dev_salts, numSalts, dev_validAddress, dev_validAddressesCount,
-                                                        prefix, options.prefix.size() / 2, suffix, options.suffix.size() / 2);
+                                                        d_prefix, prefixLen, d_suffix, suffixLen);
 
             // Allocate memory on the host for the address verification results
             uint8_t* validAddress = new uint8_t[20];
@@ -188,18 +216,25 @@ int main(int argc, char* argv[]) {
             // Cleanup memory
             delete[] deploymentAddress;
             delete[] bytecode;
-            delete[] prefix;
-            delete[] suffix;
             delete[] validAddress;
             delete validAddressesCount;
+            delete[] prefix;
+            delete[] suffix;
 
+            cudaFree(d_deploymentAddress);
+            cudaFree(d_bytecode);
             cudaFree(devStates);
             cudaFree(dev_salts);
             cudaFree(dev_validAddress);
             cudaFree(dev_validAddressesCount);
+            cudaFree(d_prefix);
+            cudaFree(d_suffix);
 
             break;
+
         }
+
+
 
         default: {
             std::cout << "Invalid command. Valid commands are: account, contract" << std::endl;

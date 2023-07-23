@@ -7,9 +7,14 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
-#include "keccak.cuh"
+
 #include "config.h"
 #include "contract.cuh"
+
+#ifndef KECCAK_INCLUDE
+#define KECCAK_INCLUDE
+#include "keccak.cuh"
+#endif
 
 #ifndef Contract_Thread
 #define Contract_Thread 512
@@ -22,6 +27,21 @@ __global__ void generatesalt (curandState* states, uint64_t* salt) {
 
     salt[index] = curand(&states[index]);
 }
+
+__device__ void keccak_hash_compute(BYTE* in, WORD inlen, BYTE* out, WORD n_outbit, WORD n_batch) {
+    // In-memory allocation since we are on device side
+    const WORD KECCAK_BLOCK_SIZE = (n_outbit >> 3);
+
+    // Iterate over each batch
+    for (int i = 0; i < n_batch; ++i) {
+        BYTE* cuda_in = in + i * inlen;
+        BYTE* cuda_out = out + i * KECCAK_BLOCK_SIZE;
+        
+        device_keccak_hash(cuda_in, inlen, cuda_out, KECCAK_BLOCK_SIZE);
+    }
+}
+
+
 
 __global__ void computeContractAdresse(uint64_t* salts, uint8_t* deploymentAddress, size_t deploymentAddressLen, uint8_t* bytecode, size_t bytecodeLen, uint8_t* contractAddresses){
     int index = threadIdx.x + blockIdx.x * blockDim.x;

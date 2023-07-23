@@ -16,10 +16,18 @@
 #define CUDA_HASH 1
 #define OCL_HASH 0
 
+#ifndef TYPE
+#define TYPE 
 typedef unsigned char BYTE;
 typedef unsigned int  WORD;
 typedef unsigned long long LONG;
+#endif
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifndef KECCAK_INCLUDE
+#define KECCAK_INCLUDE
+#include "keccak.cuh"
+#endif
