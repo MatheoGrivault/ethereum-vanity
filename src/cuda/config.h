@@ -31,3 +31,5 @@ typedef unsigned long long LONG;
 #define KECCAK_INCLUDE
 #include "keccak.cuh"
 #endif
+
+extern int THREADS_PER_BLOCK;

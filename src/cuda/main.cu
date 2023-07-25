@@ -6,6 +6,7 @@
 #include <sstream>  
 #include<curand.h>
 #include<curand_kernel.h>
+#include <cuda.h>
 
 #include "CLI11/include/CLI/CLI.hpp"
 #ifndef KECCAK_INCLUDE
@@ -15,9 +16,8 @@
 #include "compute.cuh"
 #include "contract.cuh"
 #include "config.h"
-#ifndef THREADS_PER_BLOCK
-#define THREADS_PER_BLOCK 512
-#endif
+
+int THREADS_PER_BLOCK;
 
 enum class Command {    
     Account,
@@ -99,6 +99,18 @@ bool userprompt(){
 }
 
 int main(int argc, char* argv[]) {
+
+
+    int deviceCount;
+    cudaGetDeviceCount(&deviceCount);   
+
+    int device(0);
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, device);
+
+    int maxThreadsPerBlock = deviceProp.maxThreadsPerBlock;
+    THREADS_PER_BLOCK = maxThreadsPerBlock;
+
     Options options = parseOptions(argc, argv);
     std::cout << "Start using " << THREADS_PER_BLOCK << " threads per block\n" << std::endl;
     switch (options.command) {

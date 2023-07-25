@@ -337,7 +337,7 @@ extern "C"
         cudaMalloc(&cuda_outdata, KECCAK_BLOCK_SIZE * n_batch);
         cudaMemcpy(cuda_indata, in, inlen * n_batch, cudaMemcpyHostToDevice);
 
-        WORD thread = 256;
+        WORD thread = THREADS_PER_BLOCK;
         WORD block = (n_batch + thread - 1) / thread;
 
         kernel_keccak_hash << < block, thread >> > (cuda_indata, inlen, cuda_outdata, n_batch, KECCAK_BLOCK_SIZE);
