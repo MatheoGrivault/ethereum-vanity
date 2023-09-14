@@ -1,0 +1,3 @@
+/home/christophe/Documents/ethereum-vanity/src/cuda/build/CMakeFiles/ethereum-vanity.dir
+/home/christophe/Documents/ethereum-vanity/src/cuda/build/CMakeFiles/edit_cache.dir
+/home/christophe/Documents/ethereum-vanity/src/cuda/build/CMakeFiles/rebuild_cache.dir

@@ -1,0 +1,1 @@
+ -lsecp256k1 -lcurand -lcudadevrt -lcudart_static -lrt -lpthread -ldl 

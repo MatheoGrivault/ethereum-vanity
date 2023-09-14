@@ -1,0 +1,112 @@
+verifyContractAdresse<<<gridDim, blockDim>>>(d_deploymentAddress, deploymentAddressLen, d_bytecode, bytecodeLen,
+                                            dev_salts, numSalts, dev_validAddress, dev_validAddressesCount,
+                                            d_prefix, prefixLen, d_suffix, suffixLen, dev_validSalts);
+
+                
+                cudaEventRecord(stop);
+                        
+                // Copy results from device to host
+                cudaMemcpyAsync(validAddress, dev_validAddress, 20 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+                cudaMemcpyAsync(validAddressesCount, dev_validAddressesCount, sizeof(int), cudaMemcpyDeviceToHost);
+                cudaMemcpyAsync(validSalts, dev_validSalts, numSalts * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+                cudaMemcpy(contractAddresses, dev_contractAddresses, 20 * numSalts * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+
+                cudaStreamSynchronize(stream);
+
+                cudaEventSynchronize(stop);
+                float milliseconds = 0;
+                cudaEventElapsedTime(&milliseconds, start, stop);
+                
+                if (*validAddressesCount != 0) {
+
+                    // Print the values of all the variables
+                    std::cout << "Valid address count: " << *validAddressesCount << std::endl;
+                    std::cout << "Valid address: ";
+                    for (int j = 0; j < 20; ++j) {
+                        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)validAddress[j];
+                    }
+                    std::cout << std::endl;
+                    std::cout << "Valid salts: ";
+                    for (int i = 0; i < *validAddressesCount; ++i) {
+                        std::cout << validSalts[i] << " ";
+                    }
+                    std::cout << std::endl;
+
+                    // Print all elements in the deployment address and bytecode arrays
+                    std::cout << "Deployment Address: ";
+                    for (size_t i = 0; i < deploymentAddressLen; i++) {
+                        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)deploymentAddress[i];
+                    }
+                    std::cout << std::endl;
+
+                    std::cout << "Bytecode: ";
+                    for (size_t i = 0; i < bytecodeLen; i++) {
+                        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)bytecode[i];
+                    }
+                    std::cout << std::endl;
+
+                    if (*validAddressesCount > 0) {
+                        std::cout << "Valid contract address with " << *validAddressesCount << " leading zero bytes found: ";
+                        for (int j = 0; j < 20; ++j) {
+                            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)validAddress[j];
+                        }
+                        std::cout << "\nValid salts: ";
+                        for (int i = 0; i < *validAddressesCount; ++i) {
+                            std::cout << validSalts[i] << " ";
+                        }
+                        std::cout << std::endl;
+                    } 
+                }
+
+                
+
+                if (options.loopCount % 10000 == 0){
+                    std::cout << "Loop number: " << options.loopCount << std::endl;
+                    
+                    if (options.loop == true ){
+                        options.loopCount += 1;
+                        bool decision = userprompt();
+                        if (decision == true){
+                            options.loopCount += 1;
+                            continue;
+                        }
+                        else{
+                            break;
+                        }
+                        continue;
+                    }
+                    else{
+                        break;
+                    }
+                }
+                else{
+                    options.loopCount += 1;
+                    continue;
+                }
+            }
+
+            cudaStreamDestroy(stream);
+
+            // Cleanup memory
+            delete[] deploymentAddress;
+            delete[] bytecode;
+            delete[] validAddress;
+            delete validAddressesCount;
+            delete[] prefix;
+            delete[] suffix;
+            delete[] validSalts;
+            delete[] contractAddresses;
+
+            cudaFree(dev_contractAddresses);
+            cudaFree(dev_validSalts);
+            cudaFree(d_deploymentAddress);
+            cudaFree(d_bytecode);
+            cudaFree(devStates);
+            cudaFree(dev_salts);
+            cudaFree(dev_validAddress);
+            cudaFree(dev_validAddressesCount);
+            cudaFree(d_prefix);
+            cudaFree(d_suffix);
+
+            cudaEventDestroy(start);
+            cudaEventDestroy(stop);
