@@ -294,6 +294,16 @@ __device__ void cuda_keccak_final(cuda_keccak_ctx_t *ctx, BYTE *out)
     }
 }
 
+__device__ void device_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD KECCAK_BLOCK_SIZE){
+    // Notez que nous ne traitons qu'un seul élément ici, donc pas besoin de n_batch ou de thread.
+    BYTE* in = indata;
+    BYTE* out = outdata;
+    CUDA_KECCAK_CTX ctx;
+    cuda_keccak_init(&ctx, KECCAK_BLOCK_SIZE << 3);
+    cuda_keccak_update(&ctx, in, inlen);
+    cuda_keccak_final(&ctx, out);
+}
+
 __global__ void kernel_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD n_batch, WORD KECCAK_BLOCK_SIZE){
     WORD thread = blockIdx.x * blockDim.x + threadIdx.x;
     if (thread >= n_batch)
@@ -308,37 +318,28 @@ __global__ void kernel_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD
     cuda_keccak_final(&ctx, out);
 }
 
-__device__ void device_keccak_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD KECCAK_BLOCK_SIZE){
-    // Notez que nous ne traitons qu'un seul élément ici, donc pas besoin de n_batch ou de thread.
-    BYTE* in = indata;
-    BYTE* out = outdata;
-    CUDA_KECCAK_CTX ctx;
-    cuda_keccak_init(&ctx, KECCAK_BLOCK_SIZE << 3);
-    cuda_keccak_update(&ctx, in, inlen);
-    cuda_keccak_final(&ctx, out);
-}
-
-
 extern "C"
 {
     void mcm_cuda_keccak_hash_batch(BYTE * in, WORD inlen, BYTE * out, WORD n_outbit, WORD n_batch)
     {
+        const WORD KECCAK_BLOCK_SIZE = (n_outbit >> 3);
         BYTE * cuda_indata;
         BYTE * cuda_outdata;
-        const WORD KECCAK_BLOCK_SIZE = (n_outbit >> 3);
         cudaMalloc(&cuda_indata, inlen * n_batch);
         cudaMalloc(&cuda_outdata, KECCAK_BLOCK_SIZE * n_batch);
         cudaMemcpy(cuda_indata, in, inlen * n_batch, cudaMemcpyHostToDevice);
 
-        WORD thread = THREADS_PER_BLOCK;
-        WORD block = (n_batch + thread - 1) / thread;
+        // Réduisez le nombre de threads par bloc, par exemple, à 256 threads.
+        WORD threads_per_block = 512;
+        WORD blocks = (n_batch + threads_per_block - 1) / threads_per_block;
 
-        kernel_keccak_hash << < block, thread >> > (cuda_indata, inlen, cuda_outdata, n_batch, KECCAK_BLOCK_SIZE);
+        kernel_keccak_hash << < blocks, threads_per_block >> > (cuda_indata, inlen, cuda_outdata, n_batch, KECCAK_BLOCK_SIZE);
         cudaMemcpy(out, cuda_outdata, KECCAK_BLOCK_SIZE * n_batch, cudaMemcpyDeviceToHost);
         cudaDeviceSynchronize();
         cudaError_t error = cudaGetLastError();
         if (error != cudaSuccess) {
             printf("Error cuda keccak hash: %s \n", cudaGetErrorString(error));
+            // Vous pouvez ajouter ici un mécanisme de gestion des erreurs, par exemple, réduire davantage le nombre de threads par bloc ou gérer l'erreur d'une manière appropriée à votre application.
         }
         cudaFree(cuda_indata);
         cudaFree(cuda_outdata);

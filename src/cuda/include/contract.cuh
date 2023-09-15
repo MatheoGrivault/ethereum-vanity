@@ -24,29 +24,29 @@ __global__ void generatesalt(curandState* states, unsigned char* salts);
 __device__ void keccak_hash_compute(BYTE* in, WORD inlen, BYTE* out, WORD n_outbit, WORD n_batch);
 
 // Compute contract address
-__global__ void computeContractAdresse(unsigned char* salts, uint8_t* deploymentAddress, size_t deploymentAddressLen, uint8_t* bytecode, size_t bytecodeLen, uint8_t* contractAddresses);
+__global__ void computeContractAdresse(unsigned char* salts, unsigned char* deploymentAddress, size_t deploymentAddressLen, unsigned char* bytecode, size_t bytecodeLen, unsigned char* contractAddresses);
 
 // Function to compare two memory regions.
 __device__ int cuda_memcmp(const void* s1, const void* s2, size_t n);
 
 // Function to verify prefix and suffix of the address.
-__device__ bool verifyPrefixAndSuffix(uint8_t* address, size_t addressLen, uint8_t* prefix, size_t prefixLen, uint8_t* suffix, size_t suffixLen);
+__device__ bool verifyPrefixAndSuffix(unsigned char* address, unsigned char* prefix, size_t prefixLen, unsigned char* suffix, size_t suffixLen);
 
 // Function to calculate number of zero bytes in the address.
-__device__ int calculateNumZeroBytes(uint8_t* address);
+__device__ int calculateNumZeroBytes(unsigned char* address);
 
 // Function to generate contract address using deployment address, bytecode and salt.
-__device__ void generateContractAddress(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
-                                       const uint8_t* bytecode, size_t bytecodeLen,
-                                       const unsigned char* salt, uint8_t* contractAddress);
+__device__ __device__ void generateContractAddress(const unsigned char* deploymentAddress, size_t deploymentAddressLen,
+                                       const unsigned char* bytecode, size_t bytecodeLen,
+                                       const unsigned char* salt, unsigned char* contractAddress);
 
 // Verify contract address
-__global__ void verifyContractAdresse(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
-                                        const uint8_t* bytecode, size_t bytecodeLen,
+__global__ void verifyContractAdresse(const unsigned char* deploymentAddress, size_t deploymentAddressLen,
+                                        const unsigned char* bytecode, size_t bytecodeLen,
                                         const unsigned char* salts, size_t numSalts,
-                                        uint8_t* validAddresses, int* validAddressesCount,
-                                        uint8_t* prefix, size_t prefixLen,
-                                        uint8_t* suffix, size_t suffixLen);
+                                        unsigned char* validAddresses, int* validAddressesCount,
+                                        unsigned char* prefix, size_t prefixLen,
+                                        unsigned char* suffix, size_t suffixLen);
 __device__ void keccak_hash_compute(BYTE* in, WORD inlen, BYTE* out, WORD n_outbit, WORD n_batch);
 
 

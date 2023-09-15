@@ -1,6 +1,7 @@
 #include "include/config.hpp"
 
 int THREADS_PER_BLOCK;
+#define TRYTES_PER_TRIT 50000
 
 enum class Command {    
     Account,
@@ -81,10 +82,15 @@ bool userprompt(){
     }
 }
 
+void checkCudaError(cudaError_t error, const char* functionName) {
+    if (error != cudaSuccess) {
+        std::cerr << "CUDA Error (" << functionName << "): " << cudaGetErrorString(error) << std::endl;
+        exit(EXIT_FAILURE); // Quitte le programme en cas d'erreur
+    }
+}
 
 
 int main(int argc, char* argv[]) {
-
 
     int deviceCount;
     cudaGetDeviceCount(&deviceCount);   
@@ -99,31 +105,36 @@ int main(int argc, char* argv[]) {
     Options options = parseOptions(argc, argv);
     std::cout << "Start using " << THREADS_PER_BLOCK << " threads per block\n" << std::endl;
     switch (options.command) {
-
         case Command::Account: {
-            std::cout<< "Bruteforce a private key\n" << std::endl;
-            
+            std::cout << "Bruteforce a private key\n" << std::endl;
+
+            const int numKeys = THREADS_PER_BLOCK;
+            unsigned char* privateKeys = new unsigned char[numKeys * 32];
+            unsigned char* dev_privateKeys;
+            cudaMalloc((void**)&dev_privateKeys, numKeys * 32 * sizeof(unsigned char));
+
+            unsigned char* dev_validPrivateKeys;
+            int* dev_validCount;
+            cudaMalloc((void**)&dev_validPrivateKeys, numKeys * 32 * sizeof(unsigned char));
+            cudaMalloc((void**)&dev_validCount, sizeof(int));
+
+            unsigned char* validPrivateKeys = new unsigned char[numKeys * 32];
+            int* validCount = new int(0);
+
+            dim3 blockDim(THREADS_PER_BLOCK);
+            dim3 gridDim((numKeys + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
+
             while (true) {
-                
-                const int numKeys = THREADS_PER_BLOCK;
-                uint8_t* privateKeys = new uint8_t[numKeys * 32];
-                uint8_t* dev_privateKeys;
-                cudaMalloc((void**)&dev_privateKeys, numKeys * 32 * sizeof(uint8_t));
-                
-                uint8_t* dev_validPrivateKeys;
-                int* dev_validCount;
-                cudaMalloc((void**)&dev_validPrivateKeys, numKeys * 32 * sizeof(uint8_t));
-                cudaMalloc((void**)&dev_validCount, sizeof(int));
-
-                dim3 blockDim(THREADS_PER_BLOCK);
-                dim3 gridDim((numKeys + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
                 generatePrivateKey<<<gridDim, blockDim>>>(dev_privateKeys, numKeys);
-                // New memory copy operations
-                uint8_t* validPrivateKeys = new uint8_t[numKeys * 32];
-                int* validCount = new int(0);
-                cudaMemcpy(validPrivateKeys, dev_validPrivateKeys, numKeys * 32 * sizeof(uint8_t), cudaMemcpyDeviceToHost);
-                cudaMemcpy(validCount, dev_validCount, sizeof(int), cudaMemcpyDeviceToHost);
+                cudaDeviceSynchronize();
+                unsigned char* host_privateKeys = new unsigned char[numKeys * 32];
+                cudaMemcpy(host_privateKeys, dev_privateKeys, numKeys * 32 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
 
+                cudaError_t error = cudaGetLastError();
+                if (error != cudaSuccess) {
+                    std::cerr << "CUDA error: " << cudaGetErrorString(error) << std::endl;
+                    break;  // Sortir de la boucle en cas d'erreur CUDA
+                }
 
                 bool* results = new bool[numKeys];
                 std::string* result_addresses = new std::string[numKeys];
@@ -135,67 +146,73 @@ int main(int argc, char* argv[]) {
                         std::cout << "Address with prefix " << options.prefix << " and suffix " << options.suffix << " found for private key " << i << "!" << std::endl;
                         std::cout << "Address: " << result_addresses[i] << std::endl;
                     }
-                    
                 }
 
-                delete[] privateKeys;
                 delete[] results;
                 delete[] result_addresses;
 
-                if (options.loop == true ){
-                    std::cout << "Loop number: " << options.loopCount << std::endl;
-                    options.loopCount += 1;
-                    bool decision = userprompt();
-                    if (decision == true){
-                        continue;
+                options.loopCount += 1;
+                if (options.loop == true) {
+                    if (options.loopCount % TRYTES_PER_TRIT == 0) {
+                        std::cout << "Loop number: " << options.loopCount << std::endl;
+                        bool decision = userprompt();
+                        if (decision == true) {
+                            continue;
+                        } else {
+                            break;
+                        }
                     }
-                    else{
-                        break;
-                        return 0;
-                    }
-                    continue;
-                }
-                else{
+                } else {
                     break;
                 }
-                
             }
+
+            // Libération de la mémoire à la fin
+            delete[] privateKeys;
+            delete[] validPrivateKeys;
+            delete validCount;
+            cudaFree(dev_privateKeys);
+            cudaFree(dev_validPrivateKeys);
+            cudaFree(dev_validCount);
+
             break;
         }
+
 
         case Command::Contract: {
             std::cout << "Bruteforce a CREATE2 salt\n" << std::endl;
 
             const int numSalts = THREADS_PER_BLOCK;
-            const int saltSize = 32; // Taille du sel en octets (256 bits)
+            const int saltSize = 32;
             unsigned char* h_salts = new unsigned char[numSalts * saltSize];
 
             while (true) {
-                // Allocate memory for salts and random states on the device
+                
                 unsigned char* dev_salts;
                 curandState* devStates;
 
                 cudaMalloc((void**)&devStates, numSalts * sizeof(curandState));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for devStates");
                 cudaMalloc((void**)&dev_salts, numSalts * saltSize);
+                checkCudaError(cudaGetLastError(), "cudaMalloc for dev_salts");
 
-                // Define grid and block dimensions
                 dim3 blockDim(THREADS_PER_BLOCK);
                 dim3 gridDim((numSalts + blockDim.x - 1) / blockDim.x);
 
-                // Generate salts using the device function
                 generatesalt<<<gridDim, blockDim>>>(devStates, dev_salts);
+                checkCudaError(cudaGetLastError(), "generatesalt kernel launch");
 
                 cudaMemcpy(h_salts, dev_salts, numSalts * saltSize, cudaMemcpyDeviceToHost);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from dev_salts to h_salts");
 
-                // Assuming you have a deployment address and bytecode, replace these with the actual values.
-                std::string deploymentAddressStr = options.deployerAddress; // replace with actual deployment address
-                std::string bytecodeStr = options.Bytecode; // replace with actual bytecode
+                std::string deploymentAddressStr = options.deployerAddress;
+                std::string bytecodeStr = options.Bytecode;
 
                 size_t deploymentAddressLen = deploymentAddressStr.size() / 2;
                 size_t bytecodeLen = bytecodeStr.size() / 2;
 
-                uint8_t* deploymentAddress = new uint8_t[deploymentAddressLen];
-                uint8_t* bytecode = new uint8_t[bytecodeLen];
+                unsigned char* deploymentAddress = new unsigned char[deploymentAddressLen];
+                unsigned char* bytecode = new unsigned char[bytecodeLen];
 
                 for (size_t i = 0; i < deploymentAddressLen; i++) {
                     deploymentAddress[i] = std::stoul(deploymentAddressStr.substr(i*2, 2), nullptr, 16);
@@ -205,12 +222,11 @@ int main(int argc, char* argv[]) {
                     bytecode[i] = std::stoul(bytecodeStr.substr(i*2, 2), nullptr, 16);
                 }
 
-                // Convert prefix and suffix from string to uint8_t*
                 size_t prefixLen = options.prefix.size() / 2;
                 size_t suffixLen = options.suffix.size() / 2;
 
-                uint8_t* prefix = new uint8_t[prefixLen];
-                uint8_t* suffix = new uint8_t[suffixLen];
+                unsigned char* prefix = new unsigned char[prefixLen];
+                unsigned char* suffix = new unsigned char[suffixLen];
 
                 for (size_t i = 0; i < prefixLen; i++) {
                     prefix[i] = std::stoul(options.prefix.substr(i*2, 2), nullptr, 16);
@@ -220,95 +236,104 @@ int main(int argc, char* argv[]) {
                     suffix[i] = std::stoul(options.suffix.substr(i*2, 2), nullptr, 16);
                 }
 
-                // Copying host data to device
-                uint8_t* d_deploymentAddress;
-                uint8_t* d_bytecode;
-                uint8_t* d_prefix;
-                uint8_t* d_suffix;
+                unsigned char* d_deploymentAddress;
+                unsigned char* d_bytecode;
+                unsigned char* d_prefix;
+                unsigned char* d_suffix;
 
-                cudaMalloc(&d_deploymentAddress, deploymentAddressLen * sizeof(uint8_t));
-                cudaMalloc(&d_bytecode, bytecodeLen * sizeof(uint8_t));
-                cudaMalloc(&d_prefix, prefixLen * sizeof(uint8_t));
-                cudaMalloc(&d_suffix, suffixLen * sizeof(uint8_t));
+                cudaMalloc(&d_deploymentAddress, deploymentAddressLen * sizeof(unsigned char));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for d_deploymentAddress");
+                cudaMalloc(&d_bytecode, bytecodeLen * sizeof(unsigned char));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for d_bytecode");
+                cudaMalloc(&d_prefix, prefixLen * sizeof(unsigned char));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for d_prefix");
+                cudaMalloc(&d_suffix, suffixLen * sizeof(unsigned char));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for d_suffix");
 
-                cudaMemcpy(d_deploymentAddress, deploymentAddress, deploymentAddressLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
-                cudaMemcpy(d_bytecode, bytecode, bytecodeLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
-                cudaMemcpy(d_prefix, prefix, prefixLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
-                cudaMemcpy(d_suffix, suffix, suffixLen * sizeof(uint8_t), cudaMemcpyHostToDevice);
+                cudaMemcpy(d_deploymentAddress, deploymentAddress, deploymentAddressLen * sizeof(unsigned char), cudaMemcpyHostToDevice);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from deploymentAddress to d_deploymentAddress");
+                cudaMemcpy(d_bytecode, bytecode, bytecodeLen * sizeof(unsigned char), cudaMemcpyHostToDevice);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from bytecode to d_bytecode");
+                cudaMemcpy(d_prefix, prefix, prefixLen * sizeof(unsigned char), cudaMemcpyHostToDevice);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from prefix to d_prefix");
+                cudaMemcpy(d_suffix, suffix, suffixLen * sizeof(unsigned char), cudaMemcpyHostToDevice);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from suffix to d_suffix");
 
-                // Allocate memory on the device for the address verification results
-                uint8_t* dev_validAddress;
+                unsigned char* dev_validAddress;
                 int* dev_validAddressesCount;
-                cudaMalloc((void**)&dev_validAddress, 20 * sizeof(uint8_t));
+                cudaMalloc((void**)&dev_validAddress, 20 * sizeof(unsigned char));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for dev_validAddress");
                 cudaMalloc((void**)&dev_validAddressesCount, sizeof(int));
+                checkCudaError(cudaGetLastError(), "cudaMalloc for dev_validAddressesCount");
+
+                cudaMemset(dev_validAddressesCount, 0, sizeof(int));
+                checkCudaError(cudaGetLastError(), "cudaMemset for dev_validAddressesCount");
 
                 verifyContractAdresse<<<gridDim, blockDim>>>(d_deploymentAddress, deploymentAddressLen, d_bytecode, bytecodeLen,
                                                             dev_salts, numSalts, dev_validAddress, dev_validAddressesCount,
                                                             d_prefix, prefixLen, d_suffix, suffixLen);
-
-                // Allocate memory on the host for the address verification results
-                uint8_t* validAddress = new uint8_t[20 * numSalts];
+                checkCudaError(cudaGetLastError(), "verifyContractAdresse kernel launch");
+                cudaDeviceSynchronize();
+                unsigned char* validAddress = new unsigned char[20];  
                 int* validAddressesCount = new int(0);
 
-                // Copy results from device to host
-                cudaMemcpy(validAddress, dev_validAddress, 20 * numSalts * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+                cudaMemcpy(validAddress, dev_validAddress, 20 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from dev_validAddress to validAddress");
+
                 cudaMemcpy(validAddressesCount, dev_validAddressesCount, sizeof(int), cudaMemcpyDeviceToHost);
+                checkCudaError(cudaGetLastError(), "cudaMemcpy from dev_validAddressesCount to validAddressesCount");
 
                 if (*validAddressesCount > 0) {
-                    std::cout << "Valid contract addresses with " << *validAddressesCount << " leading zero bytes found:" << std::endl;
-                    for (int j = 0; j < *validAddressesCount; ++j) {
+                    std::cout << "Valid address found:\n";
+                    for (int i = 0; i < *validAddressesCount; ++i) {
                         std::cout << "Salt: ";
-                        for (int k = 0; k < saltSize; ++k) {
-                            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)h_salts[j * saltSize + k];
+                        for (int j = 0; j < saltSize; ++j) {
+                            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)h_salts[i * saltSize + j];
                         }
-                        std::cout << " Address: ";
-                        for (int k = 0; k < 20; ++k) {
-                            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)validAddress[j * 20 + k];
+                        std::cout << std::dec << " Address: ";
+                        for (int j = 0; j < 20; ++j) {
+                            std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)validAddress[j];
                         }
-                        std::cout << std::endl;
+                        std::cout << std::dec << std::endl;
                     }
-                } 
+                }
+                options.loopCount += 1;
                 if (options.loop == true) {
-                    options.loopCount += 1;
-                    if (options.loopCount % 100000 == 0) { // Utilisation de == pour vérifier l'égalité
+                    if (options.loopCount % TRYTES_PER_TRIT == 0) {
                         std::cout << "Loop number: " << options.loopCount << std::endl;
-                        bool decision = false;
-                        decision = userprompt();
-                        
+                        bool decision = userprompt();
                         if (decision == true) {
                             continue;
                         } else {
                             break;
                         }
                     }
-                   
-
-                        
-                }
+                } 
                 else {
                     break;
                 }
 
-                // Cleanup memory
-                delete[] deploymentAddress;
-                delete[] bytecode;
                 delete[] validAddress;
                 delete validAddressesCount;
-                delete[] prefix;
-                delete[] suffix;
 
-                cudaFree(d_deploymentAddress);
-                cudaFree(d_bytecode);
-                cudaFree(devStates);
                 cudaFree(dev_salts);
                 cudaFree(dev_validAddress);
                 cudaFree(dev_validAddressesCount);
-                cudaFree(d_prefix);
-                cudaFree(d_suffix);
-                
+                cudaFree(devStates);
+
+                delete[] deploymentAddress;
+                delete[] bytecode;
+                delete[] prefix;
+                delete[] suffix;
             }
+
+            delete[] h_salts;
+
             break;
         }
+
+
+
 
 
 

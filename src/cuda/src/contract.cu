@@ -30,7 +30,7 @@ __device__ void keccak_hash_compute(BYTE* in, WORD inlen, BYTE* out, WORD n_outb
     }
 }   
 
-__global__ void computeContractAdresse(unsigned char* salts, uint8_t* deploymentAddress, size_t deploymentAddressLen, uint8_t* bytecode, size_t bytecodeLen, uint8_t* contractAddresses){
+__global__ void computeContractAdresse(unsigned char* salts, unsigned char* deploymentAddress, size_t deploymentAddressLen, unsigned char* bytecode, size_t bytecodeLen, unsigned char* contractAddresses) {
     int index = threadIdx.x + blockIdx.x * blockDim.x;
 
     unsigned char salt[32];
@@ -38,17 +38,14 @@ __global__ void computeContractAdresse(unsigned char* salts, uint8_t* deployment
         salt[i] = salts[index * 32 + i];
     }
 
-    uint8_t* data = new uint8_t[deploymentAddressLen + 32]; // La taille du sel est maintenant de 32 octets
+    unsigned char data[132];  // valeur maximale connue pour deploymentAddressLen + 32
     memcpy(data, deploymentAddress, deploymentAddressLen);
     memcpy(data + deploymentAddressLen, salt, 32);
 
-    uint8_t* hash = new uint8_t[32];
+    unsigned char hash[32];
     keccak_hash_compute(data, deploymentAddressLen + 32, hash, 256, 1);
 
     memcpy(contractAddresses + (index * 20), hash + 12, 20);
-
-    delete[] data;
-    delete[] hash;
 }
 
 
@@ -67,7 +64,7 @@ __device__ int cuda_memcmp(const void* s1, const void* s2, size_t n) {
     return 0;
 }
 
-__device__ bool verifyPrefixAndSuffix(uint8_t* address, uint8_t* prefix, size_t prefixLen, uint8_t* suffix, size_t suffixLen) {
+__device__ bool verifyPrefixAndSuffix(unsigned char* address, unsigned char* prefix, size_t prefixLen, unsigned char* suffix, size_t suffixLen) {
     if (prefixLen > 0 && cuda_memcmp(address, prefix, prefixLen) != 0) {
         return false;
     }
@@ -79,7 +76,7 @@ __device__ bool verifyPrefixAndSuffix(uint8_t* address, uint8_t* prefix, size_t 
     return true;
 }
 
-__device__ int calculateNumZeroBytes(uint8_t* address) {
+__device__ int calculateNumZeroBytes(unsigned char* address) {
     int zeroCount = 0;
 
     for (int i = 0; i < 20; i++) {
@@ -93,9 +90,9 @@ __device__ int calculateNumZeroBytes(uint8_t* address) {
     return zeroCount;
 }
 
-__device__ void generateContractAddress(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
-                                       const uint8_t* bytecode, size_t bytecodeLen,
-                                       const unsigned char* salt, uint8_t* contractAddress) {
+__device__ void generateContractAddress(const unsigned char* deploymentAddress, size_t deploymentAddressLen,
+                                       const unsigned char* bytecode, size_t bytecodeLen,
+                                       const unsigned char* salt, unsigned char* contractAddress)  {
     uint8_t* data = new uint8_t[deploymentAddressLen + 32 + bytecodeLen]; // La taille du sel est de 32 octets
     memcpy(data, deploymentAddress, deploymentAddressLen);
     memcpy(data + deploymentAddressLen, salt, 32);
@@ -111,23 +108,29 @@ __device__ void generateContractAddress(const uint8_t* deploymentAddress, size_t
 }
 
 
-__global__ void verifyContractAdresse(const uint8_t* deploymentAddress, size_t deploymentAddressLen,
-                                        const uint8_t* bytecode, size_t bytecodeLen,
+__global__ void verifyContractAdresse(const unsigned char* deploymentAddress, size_t deploymentAddressLen,
+                                        const unsigned char* bytecode, size_t bytecodeLen,
                                         const unsigned char* salts, size_t numSalts,
-                                        uint8_t* validAddresses, int* validAddressesCount,
-                                        uint8_t* prefix, size_t prefixLen,
-                                        uint8_t* suffix, size_t suffixLen){
+                                        unsigned char* validAddresses, int* validAddressesCount,
+                                        unsigned char* prefix, size_t prefixLen,
+                                        unsigned char* suffix, size_t suffixLen){
     int index = threadIdx.x + blockIdx.x * blockDim.x;
 
     if (index < numSalts) {
-        uint8_t contractAddress[20];
+        uint8_t contractAddress[20]; // Allocation sur la pile plutôt que dynamiquement
         generateContractAddress(deploymentAddress, deploymentAddressLen, bytecode, bytecodeLen, salts + index * 32, contractAddress);
 
         if (verifyPrefixAndSuffix(contractAddress, prefix, prefixLen, suffix, suffixLen)) {
             int nZeroBytes = calculateNumZeroBytes(contractAddress);
 
-            if (nZeroBytes > atomicMax(validAddressesCount, nZeroBytes)) {
-                memcpy(validAddresses, contractAddress, 20);
+            // Utilisez des variables locales pour réduire les accès atomiques et la concurrence
+            int localMax = atomicMax(validAddressesCount, nZeroBytes);
+
+            // Assurez-vous que cette condition est correctement synchronisée pour éviter les conditions de concurrence.
+            if (nZeroBytes > localMax) { 
+                for (int i = 0; i < 20; ++i) { // Remplacer memcpy par une boucle
+                    validAddresses[i] = contractAddress[i];
+                }
             }
         }
     }

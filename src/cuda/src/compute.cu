@@ -1,7 +1,7 @@
 #include "include/config.hpp"
 #include "include/keccak.cuh"
 
-__global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys){
+__global__ void generatePrivateKey(unsigned char* dev_privateKeys, int numKeys){
     int tid = threadIdx.x;
     int bid = blockIdx.x;
 
@@ -12,10 +12,11 @@ __global__ void generatePrivateKey(uint8_t* dev_privateKeys, int numKeys){
 
     if (idx < numKeys) {
         for (int i = 0; i < 32; i++) {
-            dev_privateKeys[idx*32 + i] = curand(&state) % 256;
+            dev_privateKeys[idx * 32 + i] = static_cast<unsigned char>(curand(&state) % 256);
         }
     }
 }
+
 
 std::string createAddressString(const uint8_t* addressBytes, int size){
     std::stringstream ss;
@@ -25,30 +26,32 @@ std::string createAddressString(const uint8_t* addressBytes, int size){
     return ss.str();
 }
 
-void checkAddresses(const uint8_t* privateKeys, int numKeys, const char* prefix_cstr, const char* suffix_cstr, bool* results, std::string* result_addresses) {
+void checkAddresses(const unsigned char* privateKeys, int numKeys, const char* prefix_cstr, const char* suffix_cstr, bool* results, std::string* result_addresses) {
     std::string prefix = std::string(prefix_cstr);
     std::string suffix = std::string(suffix_cstr);
-    
-    uint8_t* dev_input;
-    uint8_t* dev_output;
-    cudaMalloc((void**)&dev_input, sizeof(uint8_t)*65);
-    cudaMalloc((void**)&dev_output, sizeof(uint8_t)*32);
+
+    unsigned char* allPublicKeyBytes = new unsigned char[65 * numKeys];
+    unsigned char* hashOutputs = new unsigned char[32 * numKeys];
+
+    // Allocation de la mémoire GPU pour toutes les clés publiques et les sorties de hash
+    unsigned char* dev_publicKeyBytes;
+    unsigned char* dev_hashOutputs;
+    cudaMalloc(&dev_publicKeyBytes, sizeof(unsigned char) * 65 * numKeys);
+    cudaMalloc(&dev_hashOutputs, sizeof(unsigned char) * 32 * numKeys);
+
+    secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
 
     for (int tid = 0; tid < numKeys; ++tid) {
-        secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_SIGN);
-
-        const uint8_t* privateKey = privateKeys + tid * 32;
+        const unsigned char* privateKey = privateKeys + tid * 32;
 
         if (secp256k1_ec_seckey_verify(ctx, privateKey) != 1) {
             results[tid] = false;
-            secp256k1_context_destroy(ctx);
             continue;
         }
 
         secp256k1_pubkey publicKey;
         if (secp256k1_ec_pubkey_create(ctx, &publicKey, privateKey) != 1) {
             results[tid] = false;
-            secp256k1_context_destroy(ctx);
             continue;
         }
 
@@ -56,28 +59,37 @@ void checkAddresses(const uint8_t* privateKeys, int numKeys, const char* prefix_
         size_t publicKeySize = sizeof(publicKeyBytes);
         if (secp256k1_ec_pubkey_serialize(ctx, publicKeyBytes, &publicKeySize, &publicKey, SECP256K1_EC_COMPRESSED) != 1) {
             results[tid] = false;
-            secp256k1_context_destroy(ctx);
             continue;
         }
 
-        cudaMemcpy(dev_input, publicKeyBytes, sizeof(uint8_t)*65, cudaMemcpyHostToDevice);
+        memcpy(allPublicKeyBytes + tid * 65, publicKeyBytes, 65);
+    }
 
-        mcm_cuda_keccak_hash_batch(dev_input, publicKeySize, dev_output, 256, 1);
+    // Copier toutes les clés publiques vers la mémoire GPU
+    cudaMemcpy(dev_publicKeyBytes, allPublicKeyBytes, sizeof(unsigned char) * 65 * numKeys, cudaMemcpyHostToDevice);
 
-        uint8_t hashedPublicKey[32];
-        cudaMemcpy(hashedPublicKey, dev_output, sizeof(uint8_t)*32, cudaMemcpyDeviceToHost);
+    // Exécuter le kernel CUDA pour hacher toutes les clés publiques
+    int threads_per_block = 1024;
+    int blocks = (numKeys + threads_per_block - 1) / threads_per_block;
+    kernel_keccak_hash<<<blocks, threads_per_block>>>(dev_publicKeyBytes, 65, dev_hashOutputs, numKeys, 32);
+    cudaDeviceSynchronize();
 
-        uint8_t addressBytes[20];
+    // Récupérer les clés publiques hachées vers la CPU
+    cudaMemcpy(hashOutputs, dev_hashOutputs, sizeof(unsigned char) * 32 * numKeys, cudaMemcpyDeviceToHost);
+
+    for (int tid = 0; tid < numKeys; ++tid) {
+        unsigned char* hashedPublicKey = hashOutputs + tid * 32;
+
+        unsigned char addressBytes[20];
         memcpy(addressBytes, hashedPublicKey + 12, 20);
 
-        std::string address = createAddressString(addressBytes, 20);
+        std::string address = createAddressString(addressBytes, 20);  // Assume this function already exists
 
         bool match = true;
-        // Check prefix
         if (address.substr(0, prefix.size()) != prefix) {
             match = false;
         }
-        // Check suffix
+
         if (match && !suffix.empty() && address.substr(address.size() - suffix.size()) != suffix) {
             match = false;
         }
@@ -86,10 +98,14 @@ void checkAddresses(const uint8_t* privateKeys, int numKeys, const char* prefix_
         if (match) {
             result_addresses[tid] = address;
         }
-
-        secp256k1_context_destroy(ctx);
     }
 
-    cudaFree(dev_input);
-    cudaFree(dev_output);
+    secp256k1_context_destroy(ctx);
+    delete[] allPublicKeyBytes;
+    delete[] hashOutputs;
+
+    // Libérer la mémoire GPU
+    cudaFree(dev_publicKeyBytes);
+    cudaFree(dev_hashOutputs);
 }
+
