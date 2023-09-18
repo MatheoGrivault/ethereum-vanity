@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
 
                 for (int i = 0; i < numKeys; ++i) {
                     if (results[i]) {
-                        std::cout << "Address with prefix " << options.prefix << " and suffix " << options.suffix << " found for private key " << i << "!" << std::endl;
+                        std::cout << "Address with prefix " << options.prefix << " and suffix " << options.suffix << " found for private key " << host_privateKeys[i] << "!" << std::endl;
                         std::cout << "Address: " << result_addresses[i] << std::endl;
                     }
                 }

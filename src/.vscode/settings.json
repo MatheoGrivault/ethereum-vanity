@@ -1,0 +1,5 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "cmake.configureOnOpen": true,
+    "cmake.sourceDirectory": "/home/christophe/Documents/ethereum-vanity/src/cuda"
+}
